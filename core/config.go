@@ -125,9 +125,10 @@ func withPlatformLimits(cfg *config.Config) *config.Config {
 		if cfg.General.RedirPort == 0 {
 			cfg.General.RedirPort = 7892
 		}
-		if cfg.DNS.Enable && cfg.DNS.Listen == "" {
-			cfg.DNS.Listen = "0.0.0.0:1053"
-		}
+		cfg.General.AllowLan = true
+		cfg.General.BindAddress = "*"
+		cfg.DNS.Enable = true
+		cfg.DNS.Listen = "0.0.0.0:1053"
 	}
 	return cfg
 }

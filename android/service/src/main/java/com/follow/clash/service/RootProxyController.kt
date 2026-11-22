@@ -77,33 +77,40 @@ internal object RootProxyController {
             appendLine("IPT=\"iptables -w\"")
             appendLine("\$IPT -t nat -N $CHAIN_OUT 2>/dev/null || \$IPT -t nat -F $CHAIN_OUT")
             appendLine("\$IPT -t nat -A $CHAIN_OUT -m owner --uid-owner $myUid -j RETURN")
-            bypassCidrs.forEach { cidr ->
-                appendLine("\$IPT -t nat -A $CHAIN_OUT -d $cidr -j RETURN")
-            }
 
             if (accessControl != null && accessControl.enable && accessControl.mode == AccessControlMode.ACCEPT_SELECTED) {
                 allowedUids.filter { it != myUid }.forEach { uid ->
                     appendLine("\$IPT -t nat -A $CHAIN_OUT -p udp --dport 53 -m owner --uid-owner $uid -j REDIRECT --to-ports $DNS_PORT")
                     appendLine("\$IPT -t nat -A $CHAIN_OUT -p tcp --dport 53 -m owner --uid-owner $uid -j REDIRECT --to-ports $DNS_PORT")
+                }
+                bypassCidrs.forEach { cidr ->
+                    appendLine("\$IPT -t nat -A $CHAIN_OUT -d $cidr -j RETURN")
+                }
+                allowedUids.filter { it != myUid }.forEach { uid ->
                     appendLine("\$IPT -t nat -A $CHAIN_OUT -p tcp -m owner --uid-owner $uid -j REDIRECT --to-ports $REDIR_PORT")
                 }
             } else {
                 excludedUids.filter { it != myUid }.forEach { uid ->
                     appendLine("\$IPT -t nat -A $CHAIN_OUT -m owner --uid-owner $uid -j RETURN")
                 }
+                // Redirect DNS before private CIDR bypass so queries to LAN router (192.168.x.x:53)
+                // or carrier DNS (10.x.x.x:53) go to Mihomo DNS instead of getting poisoned.
                 appendLine("\$IPT -t nat -A $CHAIN_OUT -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT")
                 appendLine("\$IPT -t nat -A $CHAIN_OUT -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT")
+                bypassCidrs.forEach { cidr ->
+                    appendLine("\$IPT -t nat -A $CHAIN_OUT -d $cidr -j RETURN")
+                }
                 appendLine("\$IPT -t nat -A $CHAIN_OUT -p tcp -j REDIRECT --to-ports $REDIR_PORT")
             }
 
             appendLine("\$IPT -t nat -I OUTPUT 1 -j $CHAIN_OUT")
 
             appendLine("\$IPT -t nat -N $CHAIN_PRE 2>/dev/null || \$IPT -t nat -F $CHAIN_PRE")
+            appendLine("\$IPT -t nat -A $CHAIN_PRE -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT")
+            appendLine("\$IPT -t nat -A $CHAIN_PRE -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT")
             bypassCidrs.forEach { cidr ->
                 appendLine("\$IPT -t nat -A $CHAIN_PRE -d $cidr -j RETURN")
             }
-            appendLine("\$IPT -t nat -A $CHAIN_PRE -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT")
-            appendLine("\$IPT -t nat -A $CHAIN_PRE -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT")
             appendLine("\$IPT -t nat -A $CHAIN_PRE -p tcp -j REDIRECT --to-ports $REDIR_PORT")
             appendLine("\$IPT -t nat -I PREROUTING 1 -j $CHAIN_PRE")
 
@@ -123,6 +130,8 @@ internal object RootProxyController {
                     appendLine("\$IPT -t filter -A $CHAIN_QUIC -m owner --uid-owner $uid -j RETURN")
                 }
                 appendLine("\$IPT -t filter -A $CHAIN_QUIC -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable")
+                appendLine("\$IPT -t filter -A $CHAIN_QUIC -p tcp --dport 853 -j REJECT --reject-with tcp-reset")
+                appendLine("\$IPT -t filter -A $CHAIN_QUIC -p udp --dport 853 -j REJECT --reject-with icmp-port-unreachable")
             }
             appendLine("\$IPT -t filter -I OUTPUT 1 -j $CHAIN_QUIC")
 
