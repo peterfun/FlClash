@@ -13,6 +13,8 @@ internal object RootProxyController {
     private const val DNS_PORT = 1053
     private const val CHAIN_OUT = "FLCLASH_OUT"
     private const val CHAIN_PRE = "FLCLASH_PRE"
+    private const val CHAIN_QUIC = "FLCLASH_QUIC"
+    private const val CHAIN_V6 = "FLCLASH_V6"
     private const val WATCHDOG_PID_FILE = "/data/local/tmp/flclash_root_watchdog.pid"
 
     private val bypassCidrs = listOf(
@@ -24,6 +26,13 @@ internal object RootProxyController {
         "192.168.0.0/16",
         "224.0.0.0/4",
         "240.0.0.0/4",
+    )
+
+    private val bypassCidrsV6 = listOf(
+        "::1/128",
+        "fc00::/7",
+        "fe80::/10",
+        "ff00::/8",
     )
 
     @Volatile
@@ -98,6 +107,45 @@ internal object RootProxyController {
             appendLine("\$IPT -t nat -A $CHAIN_PRE -p tcp -j REDIRECT --to-ports $REDIR_PORT")
             appendLine("\$IPT -t nat -I PREROUTING 1 -j $CHAIN_PRE")
 
+            // Reject QUIC (UDP 443) for proxied apps so Facebook/YouTube/Chrome fall back
+            // to TCP HTTPS through redir-port instantly instead of waiting for UDP timeouts.
+            appendLine("\$IPT -t filter -N $CHAIN_QUIC 2>/dev/null || \$IPT -t filter -F $CHAIN_QUIC")
+            appendLine("\$IPT -t filter -A $CHAIN_QUIC -m owner --uid-owner $myUid -j RETURN")
+            bypassCidrs.forEach { cidr ->
+                appendLine("\$IPT -t filter -A $CHAIN_QUIC -d $cidr -j RETURN")
+            }
+            if (accessControl != null && accessControl.enable && accessControl.mode == AccessControlMode.ACCEPT_SELECTED) {
+                allowedUids.filter { it != myUid }.forEach { uid ->
+                    appendLine("\$IPT -t filter -A $CHAIN_QUIC -p udp --dport 443 -m owner --uid-owner $uid -j REJECT --reject-with icmp-port-unreachable")
+                }
+            } else {
+                excludedUids.filter { it != myUid }.forEach { uid ->
+                    appendLine("\$IPT -t filter -A $CHAIN_QUIC -m owner --uid-owner $uid -j RETURN")
+                }
+                appendLine("\$IPT -t filter -A $CHAIN_QUIC -p udp --dport 443 -j REJECT --reject-with icmp-port-unreachable")
+            }
+            appendLine("\$IPT -t filter -I OUTPUT 1 -j $CHAIN_QUIC")
+
+            // Reject outbound IPv6 for proxied apps so dual-stack 5G/WiFi falls back
+            // to IPv4 immediately instead of hanging on blocked IPv6 connections.
+            appendLine("IPT6=\"ip6tables -w\"")
+            appendLine("\$IPT6 -t filter -N $CHAIN_V6 2>/dev/null || \$IPT6 -t filter -F $CHAIN_V6 2>/dev/null || true")
+            appendLine("\$IPT6 -t filter -A $CHAIN_V6 -m owner --uid-owner $myUid -j RETURN 2>/dev/null || true")
+            bypassCidrsV6.forEach { cidr ->
+                appendLine("\$IPT6 -t filter -A $CHAIN_V6 -d $cidr -j RETURN 2>/dev/null || true")
+            }
+            if (accessControl != null && accessControl.enable && accessControl.mode == AccessControlMode.ACCEPT_SELECTED) {
+                allowedUids.filter { it != myUid }.forEach { uid ->
+                    appendLine("\$IPT6 -t filter -A $CHAIN_V6 -m owner --uid-owner $uid -j REJECT 2>/dev/null || true")
+                }
+            } else {
+                excludedUids.filter { it != myUid }.forEach { uid ->
+                    appendLine("\$IPT6 -t filter -A $CHAIN_V6 -m owner --uid-owner $uid -j RETURN 2>/dev/null || true")
+                }
+                appendLine("\$IPT6 -t filter -A $CHAIN_V6 -j REJECT 2>/dev/null || true")
+            }
+            appendLine("\$IPT6 -t filter -I OUTPUT 1 -j $CHAIN_V6 2>/dev/null || true")
+
             appendLine(buildWatchdogScript(myPid))
         }
 
@@ -128,12 +176,19 @@ internal object RootProxyController {
     private fun buildCleanupScript(): String = buildString {
         appendLine("if [ -f $WATCHDOG_PID_FILE ]; then kill \$(cat $WATCHDOG_PID_FILE) 2>/dev/null || true; rm -f $WATCHDOG_PID_FILE; fi")
         appendLine("IPT=\"iptables -w\"")
+        appendLine("IPT6=\"ip6tables -w\"")
         appendLine("while \$IPT -t nat -D OUTPUT -j $CHAIN_OUT 2>/dev/null; do :; done")
         appendLine("\$IPT -t nat -F $CHAIN_OUT 2>/dev/null || true")
         appendLine("\$IPT -t nat -X $CHAIN_OUT 2>/dev/null || true")
         appendLine("while \$IPT -t nat -D PREROUTING -j $CHAIN_PRE 2>/dev/null; do :; done")
         appendLine("\$IPT -t nat -F $CHAIN_PRE 2>/dev/null || true")
         appendLine("\$IPT -t nat -X $CHAIN_PRE 2>/dev/null || true")
+        appendLine("while \$IPT -t filter -D OUTPUT -j $CHAIN_QUIC 2>/dev/null; do :; done")
+        appendLine("\$IPT -t filter -F $CHAIN_QUIC 2>/dev/null || true")
+        appendLine("\$IPT -t filter -X $CHAIN_QUIC 2>/dev/null || true")
+        appendLine("while \$IPT6 -t filter -D OUTPUT -j $CHAIN_V6 2>/dev/null; do :; done")
+        appendLine("\$IPT6 -t filter -F $CHAIN_V6 2>/dev/null || true")
+        appendLine("\$IPT6 -t filter -X $CHAIN_V6 2>/dev/null || true")
     }
 
     private fun buildWatchdogScript(myPid: Int): String =
@@ -144,12 +199,19 @@ internal object RootProxyController {
             sleep 5
           done
           IPT="iptables -w"
+          IPT6="ip6tables -w"
           while ${'$'}IPT -t nat -D OUTPUT -j $CHAIN_OUT 2>/dev/null; do :; done
           ${'$'}IPT -t nat -F $CHAIN_OUT 2>/dev/null || true
           ${'$'}IPT -t nat -X $CHAIN_OUT 2>/dev/null || true
           while ${'$'}IPT -t nat -D PREROUTING -j $CHAIN_PRE 2>/dev/null; do :; done
           ${'$'}IPT -t nat -F $CHAIN_PRE 2>/dev/null || true
           ${'$'}IPT -t nat -X $CHAIN_PRE 2>/dev/null || true
+          while ${'$'}IPT -t filter -D OUTPUT -j $CHAIN_QUIC 2>/dev/null; do :; done
+          ${'$'}IPT -t filter -F $CHAIN_QUIC 2>/dev/null || true
+          ${'$'}IPT -t filter -X $CHAIN_QUIC 2>/dev/null || true
+          while ${'$'}IPT6 -t filter -D OUTPUT -j $CHAIN_V6 2>/dev/null; do :; done
+          ${'$'}IPT6 -t filter -F $CHAIN_V6 2>/dev/null || true
+          ${'$'}IPT6 -t filter -X $CHAIN_V6 2>/dev/null || true
           rm -f $WATCHDOG_PID_FILE
         ) </dev/null >/dev/null 2>&1 &
         echo ${'$'}! > $WATCHDOG_PID_FILE
