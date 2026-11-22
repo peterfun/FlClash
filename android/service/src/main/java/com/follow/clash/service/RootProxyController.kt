@@ -12,9 +12,11 @@ internal object RootProxyController {
     private const val REDIR_PORT = 7892
     private const val DNS_PORT = 1053
     private const val CHAIN_OUT = "FLCLASH_OUT"
+    private const val CHAIN_OUT6 = "FLCLASH_OUT6"
     private const val CHAIN_PRE = "FLCLASH_PRE"
     private const val CHAIN_QUIC = "FLCLASH_QUIC"
     private const val CHAIN_V6 = "FLCLASH_V6"
+    private const val FAKE_IP_CIDR = "198.18.0.0/15"
     private const val WATCHDOG_PID_FILE = "/data/local/tmp/flclash_root_watchdog.pid"
 
     private val bypassCidrs = listOf(
@@ -77,6 +79,10 @@ internal object RootProxyController {
             appendLine("IPT=\"iptables -w\"")
             appendLine("\$IPT -t nat -N $CHAIN_OUT 2>/dev/null || \$IPT -t nat -F $CHAIN_OUT")
             appendLine("\$IPT -t nat -A $CHAIN_OUT -m owner --uid-owner $myUid -j RETURN")
+            // Android netd (UID 0/1051) shares Mihomo Fake-IP DNS across all apps, so any
+            // Fake-IP (198.18.0.0/15) TCP connection must still route to Mihomo even for
+            // excluded apps (like Mi Home), otherwise it black-holes to the real internet.
+            appendLine("\$IPT -t nat -A $CHAIN_OUT -d $FAKE_IP_CIDR -p tcp -j REDIRECT --to-ports $REDIR_PORT")
 
             if (accessControl != null && accessControl.enable && accessControl.mode == AccessControlMode.ACCEPT_SELECTED) {
                 allowedUids.filter { it != myUid }.forEach { uid ->
@@ -135,11 +141,19 @@ internal object RootProxyController {
             }
             appendLine("\$IPT -t filter -I OUTPUT 1 -j $CHAIN_QUIC")
 
-            // Reject outbound IPv6 for proxied apps so dual-stack 5G/WiFi falls back
-            // to IPv4 immediately instead of hanging on blocked IPv6 connections.
+            // Redirect IPv6 DNS (port 53) to Mihomo DNS (::1053) and reject other outbound IPv6
+            // for proxied apps so dual-stack 5G/WiFi falls back to IPv4 without DNS failures.
             appendLine("IPT6=\"ip6tables -w\"")
+            appendLine("\$IPT6 -t nat -N $CHAIN_OUT6 2>/dev/null || \$IPT6 -t nat -F $CHAIN_OUT6 2>/dev/null || true")
+            appendLine("\$IPT6 -t nat -A $CHAIN_OUT6 -m owner --uid-owner $myUid -j RETURN 2>/dev/null || true")
+            appendLine("\$IPT6 -t nat -A $CHAIN_OUT6 -p udp --dport 53 -j REDIRECT --to-ports $DNS_PORT 2>/dev/null || true")
+            appendLine("\$IPT6 -t nat -A $CHAIN_OUT6 -p tcp --dport 53 -j REDIRECT --to-ports $DNS_PORT 2>/dev/null || true")
+            appendLine("\$IPT6 -t nat -I OUTPUT 1 -j $CHAIN_OUT6 2>/dev/null || true")
+
             appendLine("\$IPT6 -t filter -N $CHAIN_V6 2>/dev/null || \$IPT6 -t filter -F $CHAIN_V6 2>/dev/null || true")
             appendLine("\$IPT6 -t filter -A $CHAIN_V6 -m owner --uid-owner $myUid -j RETURN 2>/dev/null || true")
+            appendLine("\$IPT6 -t filter -A $CHAIN_V6 -p udp --dport $DNS_PORT -j RETURN 2>/dev/null || true")
+            appendLine("\$IPT6 -t filter -A $CHAIN_V6 -p tcp --dport $DNS_PORT -j RETURN 2>/dev/null || true")
             bypassCidrsV6.forEach { cidr ->
                 appendLine("\$IPT6 -t filter -A $CHAIN_V6 -d $cidr -j RETURN 2>/dev/null || true")
             }
@@ -195,6 +209,9 @@ internal object RootProxyController {
         appendLine("while \$IPT -t filter -D OUTPUT -j $CHAIN_QUIC 2>/dev/null; do :; done")
         appendLine("\$IPT -t filter -F $CHAIN_QUIC 2>/dev/null || true")
         appendLine("\$IPT -t filter -X $CHAIN_QUIC 2>/dev/null || true")
+        appendLine("while \$IPT6 -t nat -D OUTPUT -j $CHAIN_OUT6 2>/dev/null; do :; done")
+        appendLine("\$IPT6 -t nat -F $CHAIN_OUT6 2>/dev/null || true")
+        appendLine("\$IPT6 -t nat -X $CHAIN_OUT6 2>/dev/null || true")
         appendLine("while \$IPT6 -t filter -D OUTPUT -j $CHAIN_V6 2>/dev/null; do :; done")
         appendLine("\$IPT6 -t filter -F $CHAIN_V6 2>/dev/null || true")
         appendLine("\$IPT6 -t filter -X $CHAIN_V6 2>/dev/null || true")
@@ -218,6 +235,9 @@ internal object RootProxyController {
           while ${'$'}IPT -t filter -D OUTPUT -j $CHAIN_QUIC 2>/dev/null; do :; done
           ${'$'}IPT -t filter -F $CHAIN_QUIC 2>/dev/null || true
           ${'$'}IPT -t filter -X $CHAIN_QUIC 2>/dev/null || true
+          while ${'$'}IPT6 -t nat -D OUTPUT -j $CHAIN_OUT6 2>/dev/null; do :; done
+          ${'$'}IPT6 -t nat -F $CHAIN_OUT6 2>/dev/null || true
+          ${'$'}IPT6 -t nat -X $CHAIN_OUT6 2>/dev/null || true
           while ${'$'}IPT6 -t filter -D OUTPUT -j $CHAIN_V6 2>/dev/null; do :; done
           ${'$'}IPT6 -t filter -F $CHAIN_V6 2>/dev/null || true
           ${'$'}IPT6 -t filter -X $CHAIN_V6 2>/dev/null || true
