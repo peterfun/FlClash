@@ -121,6 +121,14 @@ func withPlatformLimits(cfg *config.Config) *config.Config {
 		log.Warnln("ntp write-to-system ignored: Android does not let apps set the system time")
 		cfg.NTP.WriteToSystem = false
 	}
+	if runtime.GOOS == "android" {
+		if cfg.General.RedirPort == 0 {
+			cfg.General.RedirPort = 7892
+		}
+		if cfg.DNS.Enable && cfg.DNS.Listen == "" {
+			cfg.DNS.Listen = "0.0.0.0:1053"
+		}
+	}
 	return cfg
 }
 

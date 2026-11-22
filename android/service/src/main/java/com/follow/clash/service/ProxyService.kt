@@ -35,9 +35,14 @@ class ProxyService : Service(), ManagedService {
 
     override fun onBind(intent: Intent): IBinder = binder
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        return START_STICKY
+    }
+
     override fun start() {
         try {
             modules.start()
+            RootProxyController.startRootProxy(this, ServiceConfig.vpnOptions)
         } catch (error: Exception) {
             stop()
             throw error
@@ -52,5 +57,11 @@ class ProxyService : Service(), ManagedService {
         }
     }
 
-    private fun cleanup() = modules.stop()
+    private fun cleanup() {
+        try {
+            RootProxyController.stopRootProxy()
+        } finally {
+            modules.stop()
+        }
+    }
 }

@@ -258,6 +258,7 @@ class VpnService : SystemVpnService(), ManagedService {
     override fun start() {
         try {
             modules.start()
+            RootProxyController.applyKeepAliveIfRoot(this)
             handleStart(requireNotNull(ServiceConfig.vpnOptions) { "VPN options are missing" })
         } catch (error: Exception) {
             stop()
