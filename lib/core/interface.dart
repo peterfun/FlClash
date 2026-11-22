@@ -197,7 +197,17 @@ abstract class CoreHandlerInterface {
   Future<Delay> testDelay(TestDelayParams params) {
     return _query(
       CoreMethod.proxyTestDelay,
-      _model(Delay.fromJson),
+      (data) {
+        final json = _json(data);
+        final delay = Delay.fromJson(json);
+        final googleStatus = json['google-status'];
+        if (googleStatus is int && googleStatus > 0) {
+          googleRedirectStatusCache[delay.name] = googleStatus;
+        } else if (googleRedirectStatusCache.containsKey(delay.name)) {
+          googleRedirectStatusCache[delay.name] = 0;
+        }
+        return delay;
+      },
       arguments: params.toJson(),
       timeout: delayTestGuardDuration,
     );

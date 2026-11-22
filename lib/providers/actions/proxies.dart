@@ -172,6 +172,12 @@ class ProxiesAction extends _$ProxiesAction {
 
   void setDelay(Delay delay) {
     _bufferedDelays.add(delay);
+    final googleStatus = googleRedirectStatusCache[delay.name];
+    if (googleStatus != null) {
+      _bufferedDelays.add(
+        Delay(name: delay.name, url: googleRedirectMapKey, value: googleStatus),
+      );
+    }
     _scheduleDelayFlush();
   }
 
@@ -349,6 +355,12 @@ class ProxiesAction extends _$ProxiesAction {
         group.all.whereMatches(query, (proxy) => proxy.searchFields).toList(),
         group.testUrl,
       );
+      if (ref.read(proxiesStyleSettingProvider).sortType ==
+          ProxiesSortType.none) {
+        ref
+            .read(proxiesStyleSettingProvider.notifier)
+            .update((state) => state.copyWith(sortType: ProxiesSortType.delay));
+      }
     } finally {
       testing.stop(groupName);
     }

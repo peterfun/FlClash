@@ -336,12 +336,27 @@ class _DelayTextState extends ConsumerState<_DelayText> {
     final delay = ref.watch(
       delayProvider(proxyName: widget.proxy.name, testUrl: widget.testUrl),
     );
+    final effectiveProxyName = ref.watch(
+      realSelectedProxyStateProvider(
+        widget.proxy.name,
+      ).select((state) => state.proxyName),
+    );
+    final googleStatus = ref.watch(
+      delayDataSourceProvider.select(
+        (state) => state[googleRedirectMapKey]?[effectiveProxyName],
+      ),
+    );
     final phase = ref.watch(
       delayTestPhaseProvider(
         proxyName: widget.proxy.name,
         testUrl: widget.testUrl,
       ),
     );
+    final showGoogleBadge =
+        delay != null &&
+        delay > 0 &&
+        (googleStatus == googleRedirectNative ||
+            googleStatus == googleRedirectHk);
     return Actions(
       actions: {
         ActivateIntent: CallbackAction<ActivateIntent>(
@@ -387,21 +402,68 @@ class _DelayTextState extends ConsumerState<_DelayText> {
                     onTap: _handleTestCurrentDelay,
                     child: _withFocusRing(
                       context,
-                      Text(
-                        delay > 0
-                            ? '$delay ms'
-                            : delayFailureText(delay, context.appLocalizations),
-                        maxLines: 1,
-                        style: AppTextStyle.caption2
-                            .of(context, emphasized: true)
-                            .copyWith(
-                              overflow: TextOverflow.ellipsis,
-                              color: context.colorScheme.delayColor(delay),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (showGoogleBadge) ...[
+                            _GoogleStatusBadge(
+                              isNative: googleStatus == googleRedirectNative,
                             ),
+                            const SizedBox(width: 4),
+                          ],
+                          Flexible(
+                            child: Text(
+                              delay > 0
+                                  ? '$delay ms'
+                                  : delayFailureText(
+                                      delay,
+                                      context.appLocalizations,
+                                    ),
+                              maxLines: 1,
+                              style: AppTextStyle.caption2
+                                  .of(context, emphasized: true)
+                                  .copyWith(
+                                    overflow: TextOverflow.ellipsis,
+                                    color: context.colorScheme.delayColor(
+                                      delay,
+                                    ),
+                                  ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GoogleStatusBadge extends StatelessWidget {
+  const _GoogleStatusBadge({required this.isNative});
+
+  final bool isNative;
+
+  @override
+  Widget build(BuildContext context) {
+    final badgeColor = isNative
+        ? context.colorScheme.success
+        : context.colorScheme.error;
+    return DecoratedBox(
+      decoration: ShapeDecoration(
+        color: badgeColor.withValues(alpha: 0.14),
+        shape: AppShape.xs,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: Text(
+          isNative ? '原生' : '送中',
+          maxLines: 1,
+          style: AppTextStyle.caption2
+              .of(context, emphasized: true)
+              .copyWith(color: badgeColor),
         ),
       ),
     );

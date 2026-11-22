@@ -264,9 +264,10 @@ type TestDelayParams struct {
 }
 
 type Delay struct {
-	Url   string `json:"url"`
-	Name  string `json:"name"`
-	Value int32  `json:"value"`
+	Url          string `json:"url"`
+	Name         string `json:"name"`
+	Value        int32  `json:"value"`
+	GoogleStatus int32  `json:"google-status,omitempty"`
 }
 
 type Traffic struct {

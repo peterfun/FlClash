@@ -2,6 +2,18 @@ import 'package:fl_clash/common/common.dart';
 import 'package:fl_clash/enum/enum.dart';
 import 'package:fl_clash/models/models.dart';
 
+const googleRedirectMapKey = '__flclash_google_redirect__';
+const googleRedirectNative = 1;
+const googleRedirectHk = 2;
+
+final Map<String, int> googleRedirectStatusCache = <String, int>{};
+
+int _googleRedirectRank(int? status) {
+  if (status == googleRedirectNative) return 0;
+  if (status == googleRedirectHk) return 2;
+  return 1;
+}
+
 List<Group> computeSort({
   required List<Group> groups,
   required ProxiesSortType sortType,
@@ -16,18 +28,39 @@ List<Group> computeSort({
     required Map<String, String> selectedMap,
     required String testUrl,
   }) {
-    final delayStates = {
-      for (final proxy in proxies)
-        proxy.name: computeProxyDelayState(
-          proxyName: proxy.name,
-          testUrl: testUrl,
-          groups: groups,
-          selectedMap: selectedMap,
-          delayMap: delayMap,
-        ),
-    };
-    return List.of(proxies)
-      ..sort((a, b) => delayStates[a.name]!.compareTo(delayStates[b.name]!));
+    final googleMap = delayMap[googleRedirectMapKey];
+    final delayStates = <String, DelayState>{};
+    final googleRanks = <String, int>{};
+    for (final proxy in proxies) {
+      final state = computeRealSelectedProxyState(
+        proxy.name,
+        groups: groups,
+        selectedMap: selectedMap,
+      );
+      final currentDelayMap =
+          delayMap[state.testUrl.takeFirstValid([testUrl])] ?? {};
+      final delay = currentDelayMap[state.proxyName];
+      delayStates[proxy.name] = DelayState(
+        delay: delay ?? 0,
+        group: state.group,
+      );
+      googleRanks[proxy.name] = _googleRedirectRank(
+        googleMap?[state.proxyName],
+      );
+    }
+    return List.of(proxies)..sort((a, b) {
+      final stateA = delayStates[a.name]!;
+      final stateB = delayStates[b.name]!;
+      if (stateA.delay > 0 && stateB.delay > 0) {
+        final rankCompare = googleRanks[a.name]!.compareTo(
+          googleRanks[b.name]!,
+        );
+        if (rankCompare != 0) {
+          return rankCompare;
+        }
+      }
+      return stateA.compareTo(stateB);
+    });
   }
 
   List<Proxy> sortOfName(List<Proxy> proxies) {

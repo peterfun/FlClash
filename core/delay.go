@@ -2,11 +2,16 @@ package core
 
 import (
 	"context"
+	"errors"
+	"net"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/metacubex/http"
 	"github.com/metacubex/mihomo/common/utils"
+	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/tunnel"
 )
@@ -15,7 +20,16 @@ const (
 	delayTestConcurrency    = 50
 	defaultTestURL          = "https://www.gstatic.com/generate_204"
 	defaultDelayTestTimeout = 5 * time.Second
+
+	googleStatusUnknown int32 = 0
+	googleStatusNative  int32 = 1
+	googleStatusHK      int32 = 2
+
+	googleCheckURL = "https://www.google.com/"
+	googleHKHost   = "google.com.hk"
 )
+
+var errGoogleRedirectHK = errors.New("google redirected to hk")
 
 var (
 	delayTestSlots     = make(slots, delayTestConcurrency)
@@ -96,12 +110,88 @@ func handleTestDelay(params *TestDelayParams) *Delay {
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
+	googleCtx, cancelGoogle := context.WithCancel(ctx)
+	defer cancelGoogle()
+	googleCh := make(chan int32, 1)
+	go func() {
+		googleCh <- checkGoogleRedirect(googleCtx, proxy)
+	}()
+
 	delay, err := proxy.URLTest(ctx, url, anyDelayTestStatus)
 	if err != nil {
 		delay = 0
 	}
 	result.Value = delayValue(delay, ctx.Err() != nil)
+	if result.Value > 0 {
+		result.GoogleStatus = <-googleCh
+	} else {
+		cancelGoogle()
+	}
 	return result
+}
+
+func isGoogleHKHost(host string) bool {
+	lower := strings.ToLower(host)
+	return lower == googleHKHost || strings.HasSuffix(lower, "."+googleHKHost)
+}
+
+func checkGoogleRedirect(ctx context.Context, proxy constant.Proxy) int32 {
+	tlsConfig, err := ca.GetTLSConfig(ca.Option{})
+	if err != nil {
+		return googleStatusUnknown
+	}
+	transport := &http.Transport{
+		DialContext: func(dialCtx context.Context, _, address string) (net.Conn, error) {
+			metadata, err := probeMetadata(address)
+			if err != nil {
+				return nil, err
+			}
+			return proxy.DialContext(dialCtx, metadata)
+		},
+		TLSClientConfig:     tlsConfig,
+		DisableKeepAlives:   true,
+		MaxIdleConns:        1,
+		TLSHandshakeTimeout: defaultDelayTestTimeout,
+	}
+	defer transport.CloseIdleConnections()
+
+	client := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if isGoogleHKHost(req.URL.Hostname()) {
+				return errGoogleRedirectHK
+			}
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, googleCheckURL, nil)
+	if err != nil {
+		return googleStatusUnknown
+	}
+	req.Header.Set("User-Agent", browserUserAgent)
+	req.Header.Set("Connection", "close")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		if errors.Is(err, errGoogleRedirectHK) {
+			return googleStatusHK
+		}
+		return googleStatusUnknown
+	}
+	_ = resp.Body.Close()
+
+	if resp.Request != nil && isGoogleHKHost(resp.Request.URL.Hostname()) {
+		return googleStatusHK
+	}
+	if loc := resp.Header.Get("Location"); loc != "" && strings.Contains(strings.ToLower(loc), googleHKHost) {
+		return googleStatusHK
+	}
+	return googleStatusNative
 }
 
 type testTimeoutProvider interface {

@@ -6,9 +6,16 @@
 package mobile
 
 import (
+	"runtime/debug"
+
 	"core"
 	_ "core/timezone"
 )
+
+func init() {
+	debug.SetGCPercent(50)
+	debug.SetMemoryLimit(96 << 20)
+}
 
 type ResultHandler interface {
 	OnResult(data []byte) error
